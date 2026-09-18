@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Recommendation System</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: white;
+            min-height: 100vh;
+            padding: 60px 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 42px;
+            margin-bottom: 12px;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            font-size: 17px;
+            line-height: 1.5;
+        }
+
+        .search-box {
+            background: #1e293b;
+            padding: 30px;
+            border-radius: 16px;
+            margin-bottom: 35px;
+        }
+
+        select {
+            width: 100%;
+            padding: 15px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            background: white;
+            color: #111827;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 15px;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            background: #e50914;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #b20710;
+        }
+
+        .results-title {
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+
+        .movie-card {
+            background: #1e293b;
+            padding: 20px 22px;
+            margin-bottom: 14px;
+            border-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .movie-name {
+            font-size: 17px;
+            font-weight: bold;
+        }
+
+        .score {
+            background: #334155;
+            padding: 8px 12px;
+            border-radius: 20px;
+            color: #cbd5e1;
+            font-size: 14px;
+        }
+
+        .selected {
+            color: #94a3b8;
+            margin-bottom: 20px;
+        }
+
+        .footer {
+            text-align: center;
+            color: #64748b;
+            margin-top: 45px;
+            font-size: 13px;
+        }
+
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 30px;
+            }
+
+            .movie-card {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="header">
+        <h1>🎬 Movie Recommendation System</h1>
+
+        <p class="subtitle">
+            Discover movies similar to the ones you already enjoy
+            using content-based recommendation and cosine similarity.
+        </p>
+    </div>
+
+    <div class="search-box">
+
+        <form method="POST">
+
+            <select name="movie" required>
+
+                <option value="" disabled
+                    {% if not selected_movie %}selected{% endif %}>
+                    Select a movie
+                </option>
+
+                {% for movie in movie_titles %}
+
+                <option value="{{ movie }}"
+                    {% if movie == selected_movie %}selected{% endif %}>
+                    {{ movie }}
+                </option>
+
+                {% endfor %}
+
+            </select>
+
+            <button type="submit">
+                Get Recommendations
+            </button>
+
+        </form>
+
+    </div>
+
+    {% if recommendations %}
+
+        <p class="selected">
+            Because you selected <strong>{{ selected_movie }}</strong>
+        </p>
+
+        <h2 class="results-title">
+            Recommended Movies
+        </h2>
+
+        {% for movie in recommendations %}
+
+        <div class="movie-card">
+
+            <span class="movie-name">
+                {{ loop.index }}. {{ movie.title }}
+            </span>
+
+            <span class="score">
+                {{ movie.similarity_score }}% similarity
+            </span>
+
+        </div>
+
+        {% endfor %}
+
+    {% endif %}
+
+    <div class="footer">
+        Built with Python · Flask · Scikit-learn · Content-Based Filtering
+    </div>
+
+</div>
+
+</body>
+</html>
