@@ -1,137 +1,184 @@
+import ast
 import pandas as pd
-from sklearn.preprocessing import normalize
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 # --------------------------------------------------
-# Load MovieLens movie dataset
+# Load datasets
 # --------------------------------------------------
 
-DATA_URL = "https://raw.githubusercontent.com/justmarkham/DAT8/master/data/u.item"
+movies = pd.read_csv("tmdb_5000_movies.csv")
+credits = pd.read_csv("tmdb_5000_credits.csv")
 
-columns = [
-    "movie_id",
-    "title",
-    "release_date",
-    "video_release_date",
-    "imdb_url",
-    "unknown",
-    "Action",
-    "Adventure",
-    "Animation",
-    "Children",
-    "Comedy",
-    "Crime",
-    "Documentary",
-    "Drama",
-    "Fantasy",
-    "Film-Noir",
-    "Horror",
-    "Musical",
-    "Mystery",
-    "Romance",
-    "Sci-Fi",
-    "Thriller",
-    "War",
-    "Western"
-]
 
-movies = pd.read_csv(
-    DATA_URL,
-    sep="|",
-    names=columns,
-    encoding="latin-1"
+# Merge movie metadata with cast and crew
+movies = movies.merge(
+    credits,
+    left_on="id",
+    right_on="movie_id",
+    suffixes=("", "_credits")
 )
 
 
-genre_columns = [
-    "Action",
-    "Adventure",
-    "Animation",
-    "Children",
-    "Comedy",
-    "Crime",
-    "Documentary",
-    "Drama",
-    "Fantasy",
-    "Film-Noir",
-    "Horror",
-    "Musical",
-    "Mystery",
-    "Romance",
-    "Sci-Fi",
-    "Thriller",
-    "War",
-    "Western"
-]
+# Keep useful columns
+movies = movies[
+    [
+        "id",
+        "title",
+        "overview",
+        "genres",
+        "keywords",
+        "cast",
+        "crew",
+        "release_date"
+    ]
+].copy()
+
+
+# Remove duplicates and missing titles
+movies = movies.drop_duplicates(subset="title")
+movies = movies.dropna(subset=["title"])
+movies["overview"] = movies["overview"].fillna("")
+
+
+# --------------------------------------------------
+# Helper functions
+# --------------------------------------------------
+
+def extract_names(value):
+    """Extract names from JSON-like TMDB columns."""
+
+    try:
+        items = ast.literal_eval(value)
+
+        return [
+            item["name"].replace(" ", "")
+            for item in items
+        ]
+
+    except (ValueError, SyntaxError, TypeError):
+        return []
+
+
+def extract_top_cast(value, limit=3):
+    """Extract top cast members."""
+
+    try:
+        items = ast.literal_eval(value)
+
+        return [
+            item["name"].replace(" ", "")
+            for item in items[:limit]
+        ]
+
+    except (ValueError, SyntaxError, TypeError):
+        return []
+
+
+def extract_director(value):
+    """Extract director from crew."""
+
+    try:
+        crew = ast.literal_eval(value)
+
+        for person in crew:
+
+            if person.get("job") == "Director":
+
+                return [
+                    person["name"].replace(" ", "")
+                ]
+
+    except (ValueError, SyntaxError, TypeError):
+        pass
+
+    return []
 
 
 # --------------------------------------------------
 # Feature Engineering
 # --------------------------------------------------
 
-# Extract release year
-movies["release_year"] = pd.to_datetime(
-    movies["release_date"],
-    errors="coerce"
-).dt.year
+movies["genres_list"] = movies["genres"].apply(
+    extract_names
+)
 
+movies["keywords_list"] = movies["keywords"].apply(
+    extract_names
+)
 
-# Fill missing years using median year
-median_year = movies["release_year"].median()
-movies["release_year"] = movies["release_year"].fillna(median_year)
+movies["cast_list"] = movies["cast"].apply(
+    extract_top_cast
+)
 
-
-# Normalize year to roughly 0-1 range
-min_year = movies["release_year"].min()
-max_year = movies["release_year"].max()
-
-movies["year_feature"] = (
-    (movies["release_year"] - min_year)
-    / (max_year - min_year)
+movies["director_list"] = movies["crew"].apply(
+    extract_director
 )
 
 
-# Genre features
-genre_features = movies[genre_columns].astype(float).copy()
+# Convert overview into word tokens
+movies["overview_list"] = movies["overview"].apply(
+    lambda text: str(text).lower().split()
+)
 
 
-# Give genre information stronger importance
-genre_weight = 3.0
-genre_features = genre_features * genre_weight
+# Build combined movie representation
+def create_tags(row):
+
+    # Repeating important metadata gives these
+    # features slightly more influence.
+    genres = row["genres_list"] * 3
+    keywords = row["keywords_list"] * 2
+    cast = row["cast_list"] * 2
+    director = row["director_list"] * 3
+
+    overview = row["overview_list"]
+
+    tags = (
+        genres
+        + keywords
+        + cast
+        + director
+        + overview
+    )
+
+    return " ".join(tags)
 
 
-# Give release period a smaller weight
-year_weight = 1.2
-year_features = movies[["year_feature"]] * year_weight
-
-
-# Combine genre + release-era features
-feature_matrix = pd.concat(
-    [
-        genre_features.reset_index(drop=True),
-        year_features.reset_index(drop=True)
-    ],
+movies["tags"] = movies.apply(
+    create_tags,
     axis=1
 )
 
 
-# Normalize vectors before similarity calculation
-feature_matrix = normalize(feature_matrix)
+# --------------------------------------------------
+# TF-IDF Vectorization
+# --------------------------------------------------
 
+vectorizer = TfidfVectorizer(
+    max_features=10000,
+    stop_words="english",
+    lowercase=True
+)
 
-# Calculate pairwise cosine similarity
-similarity_matrix = cosine_similarity(feature_matrix)
+feature_matrix = vectorizer.fit_transform(
+    movies["tags"]
+)
 
 
 # --------------------------------------------------
 # Recommendation Function
 # --------------------------------------------------
 
-def recommend_movies(movie_title, number_of_recommendations=5):
+def recommend_movies(
+    movie_title,
+    number_of_recommendations=5
+):
 
     matches = movies[
-        movies["title"].str.lower() == movie_title.lower()
+        movies["title"].str.lower()
+        == movie_title.lower()
     ]
 
     if matches.empty:
@@ -139,37 +186,46 @@ def recommend_movies(movie_title, number_of_recommendations=5):
 
     movie_index = matches.index[0]
 
-    similarity_scores = list(
-        enumerate(similarity_matrix[movie_index])
-    )
+    # Calculate similarity only against selected movie
+    scores = cosine_similarity(
+        feature_matrix[movie_index],
+        feature_matrix
+    ).flatten()
 
-    # Sort highest similarity first
-    similarity_scores = sorted(
-        similarity_scores,
-        key=lambda x: x[1],
-        reverse=True
-    )
+    ranked_indices = scores.argsort()[::-1]
 
     recommendations = []
 
-    for index, score in similarity_scores:
+    for index in ranked_indices:
 
-        # Do not recommend the selected movie itself
         if index == movie_index:
             continue
 
-        recommendations.append({
-            "title": movies.iloc[index]["title"],
-            "release_year": int(
-                movies.iloc[index]["release_year"]
-            ),
-            "similarity_score": round(
-                float(score) * 100,
-                2
-            )
-        })
+        movie = movies.iloc[index]
 
-        if len(recommendations) == number_of_recommendations:
+        year = ""
+
+        if pd.notna(movie["release_date"]):
+
+            year = str(
+                movie["release_date"]
+            )[:4]
+
+        recommendations.append(
+            {
+                "title": movie["title"],
+                "release_year": year,
+                "similarity_score": round(
+                    float(scores[index]) * 100,
+                    2
+                )
+            }
+        )
+
+        if (
+            len(recommendations)
+            == number_of_recommendations
+        ):
             break
 
     return recommendations
@@ -184,13 +240,17 @@ if __name__ == "__main__":
     print("Movie Recommendation System")
     print("---------------------------")
 
-    movie = input("Enter a movie title: ")
+    movie = input(
+        "Enter a movie title: "
+    ).strip()
 
     results = recommend_movies(movie)
 
     if results:
 
-        print("\nRecommended Movies:")
+        print(
+            f"\nMovies similar to {movie}:\n"
+        )
 
         for i, recommendation in enumerate(
             results,
@@ -200,9 +260,14 @@ if __name__ == "__main__":
             print(
                 f"{i}. "
                 f"{recommendation['title']} "
-                f"- {recommendation['similarity_score']}% similarity"
+                f"({recommendation['release_year']}) "
+                f"- "
+                f"{recommendation['similarity_score']}% "
+                f"similarity"
             )
 
     else:
 
-        print("\nMovie not found in dataset.")
+        print(
+            "\nMovie not found in dataset."
+        )
