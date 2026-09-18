@@ -5,23 +5,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 # --------------------------------------------------
-# Load datasets
+# Load TMDB Movie Dataset
 # --------------------------------------------------
 
 movies = pd.read_csv("tmdb_5000_movies.csv")
-credits = pd.read_csv("tmdb_5000_credits.csv")
 
-
-# Merge movie metadata with cast and crew
-movies = movies.merge(
-    credits,
-    left_on="id",
-    right_on="movie_id",
-    suffixes=("", "_credits")
-)
-
-
-# Keep useful columns
+# Keep only the columns required by the recommender
 movies = movies[
     [
         "id",
@@ -29,25 +18,28 @@ movies = movies[
         "overview",
         "genres",
         "keywords",
-        "cast",
-        "crew",
         "release_date"
     ]
 ].copy()
 
-
-# Remove duplicates and missing titles
-movies = movies.drop_duplicates(subset="title")
+# Clean dataset
 movies = movies.dropna(subset=["title"])
+movies = movies.drop_duplicates(subset=["title"])
+movies = movies.reset_index(drop=True)
+
 movies["overview"] = movies["overview"].fillna("")
+movies["genres"] = movies["genres"].fillna("[]")
+movies["keywords"] = movies["keywords"].fillna("[]")
 
 
 # --------------------------------------------------
-# Helper functions
+# Extract Metadata
 # --------------------------------------------------
 
 def extract_names(value):
-    """Extract names from JSON-like TMDB columns."""
+    """
+    Extract names from TMDB JSON-style columns.
+    """
 
     try:
         items = ast.literal_eval(value)
@@ -55,50 +47,12 @@ def extract_names(value):
         return [
             item["name"].replace(" ", "")
             for item in items
+            if "name" in item
         ]
 
     except (ValueError, SyntaxError, TypeError):
         return []
 
-
-def extract_top_cast(value, limit=3):
-    """Extract top cast members."""
-
-    try:
-        items = ast.literal_eval(value)
-
-        return [
-            item["name"].replace(" ", "")
-            for item in items[:limit]
-        ]
-
-    except (ValueError, SyntaxError, TypeError):
-        return []
-
-
-def extract_director(value):
-    """Extract director from crew."""
-
-    try:
-        crew = ast.literal_eval(value)
-
-        for person in crew:
-
-            if person.get("job") == "Director":
-
-                return [
-                    person["name"].replace(" ", "")
-                ]
-
-    except (ValueError, SyntaxError, TypeError):
-        pass
-
-    return []
-
-
-# --------------------------------------------------
-# Feature Engineering
-# --------------------------------------------------
 
 movies["genres_list"] = movies["genres"].apply(
     extract_names
@@ -108,40 +62,23 @@ movies["keywords_list"] = movies["keywords"].apply(
     extract_names
 )
 
-movies["cast_list"] = movies["cast"].apply(
-    extract_top_cast
-)
 
-movies["director_list"] = movies["crew"].apply(
-    extract_director
-)
+# --------------------------------------------------
+# Build Combined Movie Features
+# --------------------------------------------------
 
-
-# Convert overview into word tokens
-movies["overview_list"] = movies["overview"].apply(
-    lambda text: str(text).lower().split()
-)
-
-
-# Build combined movie representation
 def create_tags(row):
 
-    # Repeating important metadata gives these
-    # features slightly more influence.
+    # Genre is given extra importance
     genres = row["genres_list"] * 3
+
+    # Keywords are also strong recommendation signals
     keywords = row["keywords_list"] * 2
-    cast = row["cast_list"] * 2
-    director = row["director_list"] * 3
 
-    overview = row["overview_list"]
+    # Plot description
+    overview = str(row["overview"]).lower().split()
 
-    tags = (
-        genres
-        + keywords
-        + cast
-        + director
-        + overview
-    )
+    tags = genres + keywords + overview
 
     return " ".join(tags)
 
@@ -186,46 +123,44 @@ def recommend_movies(
 
     movie_index = matches.index[0]
 
-    # Calculate similarity only against selected movie
-    scores = cosine_similarity(
+    # Compare selected movie with all other movies
+    similarity_scores = cosine_similarity(
         feature_matrix[movie_index],
         feature_matrix
     ).flatten()
 
-    ranked_indices = scores.argsort()[::-1]
+    # Highest similarity first
+    ranked_indices = similarity_scores.argsort()[::-1]
 
     recommendations = []
 
     for index in ranked_indices:
 
+        # Skip the selected movie itself
         if index == movie_index:
             continue
 
         movie = movies.iloc[index]
 
-        year = ""
+        release_year = ""
 
         if pd.notna(movie["release_date"]):
-
-            year = str(
+            release_year = str(
                 movie["release_date"]
             )[:4]
 
         recommendations.append(
             {
                 "title": movie["title"],
-                "release_year": year,
+                "release_year": release_year,
                 "similarity_score": round(
-                    float(scores[index]) * 100,
+                    float(similarity_scores[index]) * 100,
                     2
                 )
             }
         )
 
-        if (
-            len(recommendations)
-            == number_of_recommendations
-        ):
+        if len(recommendations) == number_of_recommendations:
             break
 
     return recommendations
@@ -240,16 +175,16 @@ if __name__ == "__main__":
     print("Movie Recommendation System")
     print("---------------------------")
 
-    movie = input(
+    movie_title = input(
         "Enter a movie title: "
     ).strip()
 
-    results = recommend_movies(movie)
+    results = recommend_movies(movie_title)
 
     if results:
 
         print(
-            f"\nMovies similar to {movie}:\n"
+            f"\nMovies similar to {movie_title}:\n"
         )
 
         for i, recommendation in enumerate(
@@ -262,12 +197,9 @@ if __name__ == "__main__":
                 f"{recommendation['title']} "
                 f"({recommendation['release_year']}) "
                 f"- "
-                f"{recommendation['similarity_score']}% "
-                f"similarity"
+                f"{recommendation['similarity_score']}% similarity"
             )
 
     else:
 
-        print(
-            "\nMovie not found in dataset."
-        )
+        print("\nMovie not found in dataset.")
